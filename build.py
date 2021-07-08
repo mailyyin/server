@@ -343,7 +343,7 @@ def backend_cmake_args(images, components, be, install_dir, library_paths):
     elif be == 'fastertransformer':
         args = []
     elif be == 'tensorrt':
-        args = []
+        args = tensorrt_cmake_args()
     elif be in EXAMPLE_BACKENDS:
         args = []
     else:
