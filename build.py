@@ -269,10 +269,10 @@ def core_cmake_args(components, backends, install_dir):
         if not be.startswith('tensorflow'):
             cargs.append('-DTRITON_ENABLE_{}={}'.format(
                 be.upper(), cmake_enable(be in backends)))
-        if (be in CORE_BACKENDS) and (be in backends):
-            if be == 'tensorrt':
+        if be == 'tensorrt':
                 cargs += tensorrt_cmake_args()
-            elif be == 'ensemble':
+        if (be in CORE_BACKENDS) and (be in backends):
+            if be == 'ensemble':
                 pass
             else:
                 fail('unknown core backend {}'.format(be))
