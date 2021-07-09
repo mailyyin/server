@@ -652,9 +652,10 @@ FROM ${{BASE_IMAGE}}
 ENV PATH /opt/tritonserver/bin:${{PATH}}
 '''.format(argmap['BASE_IMAGE'])
 
+    df += dockerfile_add_installation_linux(argmap, backends)
+
     df += '''
 WORKDIR /opt/tritonserver
-RUN rm -fr /opt/tritonserver/*
 COPY --chown=1000:1000 LICENSE .
 COPY --chown=1000:1000 TRITON_VERSION .
 COPY --chown=1000:1000 NVIDIA_Deep_Learning_Container_License.pdf .
@@ -684,9 +685,6 @@ COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/repoag
 LABEL com.amazonaws.sagemaker.capabilities.accept-bind-to-port=true
 COPY --chown=1000:1000 --from=tritonserver_build /workspace/build/sagemaker/serve /usr/bin/.
 '''
-
-    df += dockerfile_add_installation_linux(argmap, backends)
-
     mkdir(ddir)
     with open(os.path.join(ddir, dockerfile_name), "w") as dfile:
         dfile.write(df)
@@ -694,6 +692,7 @@ COPY --chown=1000:1000 --from=tritonserver_build /workspace/build/sagemaker/serv
 
 def dockerfile_add_installation_linux(argmap, backends):
     # Common steps for production docker image, shared by build.py and compose.py
+    # set enviroment variables and TRITON_SERVER_USER so should be added earlier
     df = '''
 ARG TRITON_VERSION={}
 ARG TRITON_CONTAINER_VERSION={}
@@ -757,6 +756,7 @@ RUN ln -sf ${_CUDA_COMPAT_PATH}/lib.real ${_CUDA_COMPAT_PATH}/lib \
  && rm -f ${_CUDA_COMPAT_PATH}/lib
 
 WORKDIR /opt/tritonserver
+RUN rm -fr /opt/tritonserver/*
 COPY --chown=1000:1000 nvidia_entrypoint.sh .
 ENTRYPOINT ["/opt/tritonserver/nvidia_entrypoint.sh"]
 '''
