@@ -648,8 +648,6 @@ FROM ${{BUILD_IMAGE}} AS tritonserver_build
 ##  Production stage: Create container with just inference server executable
 ############################################################################
 FROM ${{BASE_IMAGE}}
-
-ENV PATH /opt/tritonserver/bin:${{PATH}}
 '''.format(argmap['BASE_IMAGE'])
 
     df += dockerfile_add_installation_linux(argmap, backends)
@@ -697,6 +695,8 @@ def dockerfile_add_installation_linux(argmap, backends):
 ARG TRITON_VERSION={}
 ARG TRITON_CONTAINER_VERSION={}
 
+ARG TRITON_VERSION
+ARG TRITON_CONTAINER_VERSION
 ENV TRITON_SERVER_VERSION ${{TRITON_VERSION}}
 ENV NVIDIA_TRITON_SERVER_VERSION ${{TRITON_CONTAINER_VERSION}}
 ENV TRITON_SERVER_VERSION ${{TRITON_VERSION}}
