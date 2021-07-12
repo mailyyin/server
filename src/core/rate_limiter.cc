@@ -186,7 +186,7 @@ RateLimiter::DequeuePayload(
     {
       std::unique_lock<std::mutex> lk(payload_queue->mu_);
       payload_queue->cv_.wait(
-          lk, [instances, &instance_index, payload_queue]() {
+          lk, [&instances, &instance_index, payload_queue]() {
             bool empty = payload_queue->queue_.empty();
             if (empty) {
               instance_index = 0;
