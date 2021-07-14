@@ -146,7 +146,8 @@ class RateLimiter {
         const Operation op_type, TritonModelInstance* instance = nullptr);
     Operation GetOpType() { return op_type_; }
     std::mutex* GetExecMutex() { return exec_mu_.get(); }
-    size_t BatchSize() { return requests_.size(); }
+    size_t RequestCount() { return requests_.size(); }
+    size_t BatchSize();
     void ReserveRequests(size_t size);
     void AddRequest(std::unique_ptr<InferenceRequest> request);
     void SetCallback(std::function<void()> OnCallback);

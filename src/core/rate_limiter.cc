@@ -185,6 +185,7 @@ RateLimiter::DequeuePayload(
     size_t instance_index;
     {
       std::unique_lock<std::mutex> lk(payload_queue->mu_);
+      LOG_INFO << "BT: Waiting for request";
       payload_queue->cv_.wait(
           lk, [&instances, &instance_index, payload_queue]() {
             bool empty = payload_queue->queue_.empty();
@@ -211,6 +212,10 @@ RateLimiter::DequeuePayload(
         *payload = payload_queue->queue_.front();
         payload_queue->queue_.pop_front();
       }
+    }
+    {
+      std::lock_guard<std::mutex> exec_lock(*((*payload)->GetExecMutex()));
+      (*payload)->SetState(Payload::State::EXECUTING);
     }
     (*payload)->Callback();
     if ((*payload)->GetInstance() == nullptr) {
@@ -290,6 +295,16 @@ RateLimiter::Payload::Release()
   OnCallback_ = []() {};
 }
 
+size_t
+RateLimiter::Payload::BatchSize()
+{
+  size_t batch_size = 0;
+  for (const auto& request : requests_) {
+    batch_size += std::max(1U, request->BatchSize());
+  }
+  return batch_size;
+}
+
 void
 RateLimiter::Payload::ReserveRequests(size_t size)
 {
@@ -336,10 +351,6 @@ void
 RateLimiter::Payload::Execute(bool* should_exit)
 {
   *should_exit = false;
-  {
-    std::lock_guard<std::mutex> lock(*exec_mu_);
-    state_ = State::EXECUTING;
-  }
 
   Status status;
   switch (op_type_) {

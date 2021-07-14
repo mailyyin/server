@@ -174,7 +174,13 @@ DynamicBatchScheduler::Enqueue(std::unique_ptr<InferenceRequest>& request)
       // We may wake up runner less often if we don't enforce equal shape within
       // a batch, otherwise must always wake up runner to check it
       if (enforce_equal_shape_tensors_.empty()) {
-        wake_batcher &= (queued_batch_size_ >= next_preferred_batch_size_);
+        std::lock_guard<std::mutex> exec_lock(*(curr_payload_->GetExecMutex()));
+        auto payload_state = curr_payload_->GetState();
+        wake_batcher &=
+            ((payload_saturated_) ||
+             (payload_state == RateLimiter::Payload::State::EXECUTING) ||
+             (payload_state == RateLimiter::Payload::State::RELEASED) ||
+             (queued_batch_size_ >= next_preferred_batch_size_));
       }
     }
 
@@ -226,6 +232,7 @@ DynamicBatchScheduler::BatcherThread(const int nice)
     return model_->Server()->GetRateLimiter()->PayloadSlotAvailable(model_);
   };
   NewPayload();
+  const uint64_t default_wait_microseconds = 500 * 1000;
 
   while (!scheduler_thread_exit_.load()) {
     NVTX_RANGE(nvtx_, "DynamicBatcher " + model_->Name());
@@ -234,22 +241,20 @@ DynamicBatchScheduler::BatcherThread(const int nice)
         rejected_requests;
     uint64_t wait_microseconds = 0;
 
-    auto payload_state = curr_payload_->GetState();
-    if (payload_saturated_ ||
-        payload_state == RateLimiter::Payload::State::EXECUTING ||
-        payload_state == RateLimiter::Payload::State::RELEASED) {
-      NewPayload();
-      next_preferred_batch_size_ = 0;
-      required_equal_inputs_.clear();
-    }
-
     // Hold the lock for as short a time as possible.
     {
       std::unique_lock<std::mutex> lock(mu_);
-      auto requests_available = [this]() {
-        return (!queue_.Empty()) || scheduler_thread_exit_.load();
-      };
-      cv_.wait(lock, requests_available);
+      {
+        std::lock_guard<std::mutex> exec_lock(*(curr_payload_->GetExecMutex()));
+        auto payload_state = curr_payload_->GetState();
+        if (payload_saturated_ ||
+            payload_state == RateLimiter::Payload::State::EXECUTING ||
+            payload_state == RateLimiter::Payload::State::RELEASED) {
+          NewPayload();
+          next_preferred_batch_size_ = 0;
+          required_equal_inputs_.clear();
+        }
+      }
 
       if (delay_cnt > 0) {
         // Debugging/testing... wait until queue contains 'delay_cnt'
@@ -262,12 +267,12 @@ DynamicBatchScheduler::BatcherThread(const int nice)
                        << " until " << delay_cnt
                        << " queued requests, current total = " << queue_.Size();
       } else if (queue_.Empty()) {
-        wait_microseconds = 0;
+        wait_microseconds = default_wait_microseconds;
       } else {
         if (payload_saturated_) {
           continue;
         }
-        slot_cv_.wait(lock, wait_for_slots);
+        cv_.wait(lock, wait_for_slots);
         {
           std::lock_guard<std::mutex> exec_lock(
               *(curr_payload_->GetExecMutex()));
@@ -329,7 +334,7 @@ DynamicBatchScheduler::BatcherThread(const int nice)
     }
 
     if (curr_payload_->GetState() == RateLimiter::Payload::State::READY) {
-      auto callback = [this]() { slot_cv_.notify_one(); };
+      auto callback = [this]() { cv_.notify_one(); };
       curr_payload_->SetCallback(callback);
       model_->Server()->GetRateLimiter()->EnqueuePayload(model_, curr_payload_);
       // curr_payload_->SetInstance(model_->Instances()[0].get());
