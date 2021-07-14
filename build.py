@@ -65,19 +65,19 @@ from distutils.dir_util import copy_tree
 # incorrectly load the other version of the openvino libraries.
 #
 TRITON_VERSION_MAP = {
-    '2.12.0dev':
-      ('21.07dev',   # triton container
-       '21.06',      # upstream container
-       '1.8.0',      # ORT
-       '2021.2.200', # ORT OpenVINO
-       '2021.2')     # Standalone OpenVINO
+    '2.12.0dev': (
+        '21.07dev',  # triton container
+        '21.06',  # upstream container
+        '1.8.0',  # ORT
+        '2021.2.200',  # ORT OpenVINO
+        '2021.2')  # Standalone OpenVINO
 }
 
 EXAMPLE_BACKENDS = ['identity', 'square', 'repeat']
 CORE_BACKENDS = ['tensorrt', 'ensemble']
 NONCORE_BACKENDS = [
     'tensorflow1', 'tensorflow2', 'onnxruntime', 'python', 'dali', 'pytorch',
-    'openvino', 'fil', 'fastertransformer'
+    'openvino', 'fil'
 ]
 EXAMPLE_REPOAGENTS = ['checksum']
 FLAGS = None
@@ -340,8 +340,6 @@ def backend_cmake_args(images, components, be, install_dir, library_paths):
         args = pytorch_cmake_args(images)
     elif be == 'fil':
         args = fil_cmake_args(images)
-    elif be == 'fastertransformer':
-        args = []
     elif be in EXAMPLE_BACKENDS:
         args = []
     else:
@@ -497,6 +495,19 @@ def fil_cmake_args(images):
     return cargs
 
 
+def get_container_versions(version, container_version,
+                           upstream_container_version):
+    if container_version is None:
+        if version not in TRITON_VERSION_MAP:
+            fail('container version not known for {}'.format(version))
+        container_version = TRITON_VERSION_MAP[version][0]
+    if upstream_container_version is None:
+        if version not in TRITON_VERSION_MAP:
+            fail('upstream container version not known for {}'.format(version))
+        upstream_container_version = TRITON_VERSION_MAP[version][1]
+    return container_version, upstream_container_version
+
+
 def create_dockerfile_buildbase(ddir, dockerfile_name, argmap, backends):
     df = '''
 ARG TRITON_VERSION={}
@@ -625,7 +636,6 @@ def create_dockerfile_linux(ddir, dockerfile_name, argmap, backends, repoagents,
 #
 ARG TRITON_VERSION={}
 ARG TRITON_CONTAINER_VERSION={}
-
 ARG BASE_IMAGE={}
 ARG BUILD_IMAGE=tritonserver_build
 
@@ -638,19 +648,60 @@ FROM ${{BUILD_IMAGE}} AS tritonserver_build
 ##  Production stage: Create container with just inference server executable
 ############################################################################
 FROM ${{BASE_IMAGE}}
+'''.format(argmap['TRITON_VERSION'], argmap['TRITON_CONTAINER_VERSION'],
+           argmap['BASE_IMAGE'])
 
+    df += dockerfile_add_installation_linux(argmap, backends)
+
+    df += '''
+WORKDIR /opt/tritonserver
+COPY --chown=1000:1000 LICENSE .
+COPY --chown=1000:1000 TRITON_VERSION .
+COPY --chown=1000:1000 NVIDIA_Deep_Learning_Container_License.pdf .
+COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/bin/tritonserver bin/
+COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/lib/libtritonserver.so lib/
+COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/include/triton/core include/triton/core
+
+# Top-level include/core not copied so --chown does not set it correctly,
+# so explicit set on all of include
+RUN chown -R triton-server:triton-server include
+'''
+
+    for noncore in NONCORE_BACKENDS:
+        if noncore in backends:
+            df += '''
+COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/backends backends
+'''
+            break
+
+    if len(repoagents) > 0:
+        df += '''
+COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/repoagents repoagents
+'''
+    # Add feature labels for SageMaker endpoint
+    if 'sagemaker' in endpoints:
+        df += '''
+LABEL com.amazonaws.sagemaker.capabilities.accept-bind-to-port=true
+COPY --chown=1000:1000 --from=tritonserver_build /workspace/build/sagemaker/serve /usr/bin/.
+'''
+    mkdir(ddir)
+    with open(os.path.join(ddir, dockerfile_name), "w") as dfile:
+        dfile.write(df)
+
+
+def dockerfile_add_installation_linux(argmap, backends):
+    # Common steps for production docker image, shared by build.py and compose.py
+    # set enviroment variables and TRITON_SERVER_USER so should be added earlier
+    df = '''
 ARG TRITON_VERSION
 ARG TRITON_CONTAINER_VERSION
 
-ENV TRITON_SERVER_VERSION ${{TRITON_VERSION}}
-ENV NVIDIA_TRITON_SERVER_VERSION ${{TRITON_CONTAINER_VERSION}}
-ENV TRITON_SERVER_VERSION ${{TRITON_VERSION}}
-ENV NVIDIA_TRITON_SERVER_VERSION ${{TRITON_CONTAINER_VERSION}}
-LABEL com.nvidia.tritonserver.version="${{TRITON_SERVER_VERSION}}"
+ENV TRITON_SERVER_VERSION ${TRITON_VERSION}
+ENV NVIDIA_TRITON_SERVER_VERSION ${TRITON_CONTAINER_VERSION}
+LABEL com.nvidia.tritonserver.version="${TRITON_SERVER_VERSION}"
 
-ENV PATH /opt/tritonserver/bin:${{PATH}}
-'''.format(argmap['TRITON_VERSION'], argmap['TRITON_CONTAINER_VERSION'],
-           argmap['BASE_IMAGE'])
+ENV PATH /opt/tritonserver/bin:${PATH}
+'''
     df += '''
 ENV TF_ADJUST_HUE_FUSED         1
 ENV TF_ADJUST_SATURATION_FUSED  1
@@ -695,58 +746,25 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 '''
     df += '''
+# Extra defensive wiring for CUDA Compat lib
+RUN ln -sf ${_CUDA_COMPAT_PATH}/lib.real ${_CUDA_COMPAT_PATH}/lib \
+ && echo ${_CUDA_COMPAT_PATH}/lib > /etc/ld.so.conf.d/00-cuda-compat.conf \
+ && ldconfig \
+ && rm -f ${_CUDA_COMPAT_PATH}/lib
+
 WORKDIR /opt/tritonserver
 RUN rm -fr /opt/tritonserver/*
-COPY --chown=1000:1000 LICENSE .
-COPY --chown=1000:1000 TRITON_VERSION .
-COPY --chown=1000:1000 NVIDIA_Deep_Learning_Container_License.pdf .
-COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/bin/tritonserver bin/
-COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/lib/libtritonserver.so lib/
-COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/include/triton/core include/triton/core
-
-# Top-level include/core not copied so --chown does not set it correctly,
-# so explicit set on all of include
-RUN chown -R triton-server:triton-server include
-'''
-
-    for noncore in NONCORE_BACKENDS:
-        if noncore in backends:
-            df += '''
-COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/backends backends
-'''
-            break
-
-    if len(repoagents) > 0:
-        df += '''
-COPY --chown=1000:1000 --from=tritonserver_build /tmp/tritonbuild/install/repoagents repoagents
-'''
-
-    df += '''
-# Extra defensive wiring for CUDA Compat lib
-RUN ln -sf ${{_CUDA_COMPAT_PATH}}/lib.real ${{_CUDA_COMPAT_PATH}}/lib \
- && echo ${{_CUDA_COMPAT_PATH}}/lib > /etc/ld.so.conf.d/00-cuda-compat.conf \
- && ldconfig \
- && rm -f ${{_CUDA_COMPAT_PATH}}/lib
-
-COPY --chown=1000:1000 nvidia_entrypoint.sh /opt/tritonserver
+COPY --chown=1000:1000 nvidia_entrypoint.sh .
 ENTRYPOINT ["/opt/tritonserver/nvidia_entrypoint.sh"]
-
+'''
+    df += '''
 ENV NVIDIA_BUILD_ID {}
 LABEL com.nvidia.build.id={}
 LABEL com.nvidia.build.ref={}
 '''.format(argmap['NVIDIA_BUILD_ID'], argmap['NVIDIA_BUILD_ID'],
            argmap['NVIDIA_BUILD_REF'])
 
-    # Add feature labels for SageMaker endpoint
-    if 'sagemaker' in endpoints:
-        df += '''
-LABEL com.amazonaws.sagemaker.capabilities.accept-bind-to-port=true
-COPY --chown=1000:1000 --from=tritonserver_build /workspace/build/sagemaker/serve /usr/bin/.
-'''
-
-    mkdir(ddir)
-    with open(os.path.join(ddir, dockerfile_name), "w") as dfile:
-        dfile.write(df)
+    return df
 
 
 def create_dockerfile_windows(ddir, dockerfile_name, argmap, backends,
@@ -774,8 +792,6 @@ FROM ${{BASE_IMAGE}}
 ARG TRITON_VERSION
 ARG TRITON_CONTAINER_VERSION
 
-ENV TRITON_SERVER_VERSION ${{TRITON_VERSION}}
-ENV NVIDIA_TRITON_SERVER_VERSION ${{TRITON_CONTAINER_VERSION}}
 ENV TRITON_SERVER_VERSION ${{TRITON_VERSION}}
 ENV NVIDIA_TRITON_SERVER_VERSION ${{TRITON_CONTAINER_VERSION}}
 LABEL com.nvidia.tritonserver.version="${{TRITON_SERVER_VERSION}}"
@@ -1235,40 +1251,22 @@ if __name__ == '__main__':
             FLAGS.version = vfile.readline().strip()
 
     log('version {}'.format(FLAGS.version))
-
-    # Determine the default repo-tag that should be used for images,
-    # backends and repo-agents if a repo-tag is not given
-    # explicitly. For release branches we use the release branch as
-    # the default, otherwise we use 'main'.
     default_repo_tag = 'main'
-    cver = FLAGS.container_version
-    if cver is None:
-        if FLAGS.version not in TRITON_VERSION_MAP:
-            fail(
-                'unable to determine default repo-tag, container version not known for {}'.format(
-                    FLAGS.version))
-        cver = TRITON_VERSION_MAP[FLAGS.version][0]
-    if not cver.endswith('dev'):
-        default_repo_tag = 'r' + cver
-    log('default repo-tag: {}'.format(default_repo_tag))
 
     # For other versions use the TRITON_VERSION_MAP unless explicitly
     # given.
     if not FLAGS.no_container_build:
-        if FLAGS.container_version is None:
-            if FLAGS.version not in TRITON_VERSION_MAP:
-                fail('container version not known for {}'.format(FLAGS.version))
-        FLAGS.container_version = TRITON_VERSION_MAP[FLAGS.version][0]
-        if FLAGS.upstream_container_version is None:
-            if FLAGS.version not in TRITON_VERSION_MAP:
-                fail('upstream container version not known for {}'.format(
-                    FLAGS.version))
-            FLAGS.upstream_container_version = TRITON_VERSION_MAP[
-                FLAGS.version][1]
+        FLAGS.container_version, FLAGS.upstream_container_version = get_container_versions(
+            FLAGS.version, FLAGS.container_version,
+            FLAGS.upstream_container_version)
 
         log('container version {}'.format(FLAGS.container_version))
         log('upstream container version {}'.format(
             FLAGS.upstream_container_version))
+
+        # Determine the default <repo-tag> based on container version.
+        if not FLAGS.container_version.endswith('dev'):
+            default_repo_tag = 'r' + FLAGS.container_version
 
     # Initialize map of backends to build and repo-tag for each.
     backends = {}
