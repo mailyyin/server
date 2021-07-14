@@ -185,7 +185,6 @@ RateLimiter::DequeuePayload(
     size_t instance_index;
     {
       std::unique_lock<std::mutex> lk(payload_queue->mu_);
-      LOG_INFO << "BT: Waiting for request";
       payload_queue->cv_.wait(
           lk, [&instances, &instance_index, payload_queue]() {
             bool empty = payload_queue->queue_.empty();
