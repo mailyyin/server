@@ -73,7 +73,7 @@ CLIENT_BS=8
 # Set the number of repetitions in nightly and weekly tests
 # Set the email subject for nightly and weekly tests
 if [ "$TRITON_PERF_WEEKLY" == 1 ]; then
-    REPETITION=200
+    REPETITION=220
     EMAIL_SUBJECT="Weekly"
 else
     REPETITION=3
