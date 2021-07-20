@@ -313,6 +313,137 @@ InferenceRequest::CopyAsNull(const InferenceRequest& from)
   return lrequest.release();
 }
 
+InferenceRequest*
+InferenceRequest::CopyAsNull(const InferenceRequest& from, int batch_size)
+{
+  int from_batch_size = from.batch_size_;
+  int to_batch_size = batch_size;
+
+  // Create a copy of 'from' request with artifical inputs and no requested
+  // outputs. Maybe more efficient to share inputs and other metadata,
+  // but that binds the Null request with 'from' request's lifecycle.
+  std::unique_ptr<InferenceRequest> lrequest(
+      new InferenceRequest(from.backend_raw_, from.requested_model_version_));
+  lrequest->needs_normalization_ = false;
+  lrequest->batch_size_ = to_batch_size;
+  lrequest->collect_stats_ = false;
+
+  // Three passes: first to construct input for the shape tensors inputs, second
+  // to obtain the max input byte size for allocating a large enough buffer for
+  // all non shape tensor inputs; third to construct the inputs for these
+  // tensors.
+  //  First pass
+  for (const auto& input : from.OriginalInputs()) {
+    // Handle only shape tensors in this pass
+    if (!input.second.IsShapeTensor()) {
+      continue;
+    }
+
+    // Prepare the memory to hold input data
+    size_t byte_size = input.second.Data()->TotalByteSize() / from_batch_size * to_batch_size;
+    auto mem_type = TRITONSERVER_MEMORY_CPU;
+    int64_t mem_id = 0;
+    std::shared_ptr<MutableMemory> data =
+        std::make_shared<AllocatedMemory>(byte_size, mem_type, mem_id);
+
+    // // Get the source buffer. Assumes shape tensors be in a single buffer on the
+    // // CPU
+    // const auto& from_data = input.second.Data();
+    // size_t from_data_byte_size;
+    // TRITONSERVER_MemoryType from_data_memory_type;
+    // int64_t from_data_memory_id;
+    // const char* from_data_buffer = from_data->BufferAt(
+    //     0 /* idx */, &from_data_byte_size, &from_data_memory_type,
+    //     &from_data_memory_id);
+
+    // if (from_data_byte_size != byte_size) {
+    //   LOG_WARNING
+    //       << "The byte size of shape tensor to be copied does not match";
+    // }
+
+    // // Copy the shape values to the input buffer
+    // std::memcpy(data->MutableBuffer(), from_data_buffer, from_data_byte_size);
+
+    std::vector<int64_t> from_shape = input.second.Shape(), from_shape_with_batch = input.second.ShapeWithBatchDim();
+    std::vector<int64_t> to_shape = from_shape, to_shape_with_batch = from_shape_with_batch;
+    if (from_shape[0] == from_batch_size) {
+      to_shape[0] = to_batch_size;
+    }
+    if (from_shape_with_batch[0] == from_batch_size) {
+      to_shape_with_batch[0] = to_batch_size;
+    }
+
+    Input* new_input;
+    lrequest->AddOriginalInput(
+        input.first, input.second.DType(), to_shape, &new_input);
+
+    // Must normalize shape here...
+    *new_input->MutableShape() = to_shape;
+    *new_input->MutableShapeWithBatchDim() = to_shape_with_batch;
+
+    new_input->SetData(data);
+  }
+
+
+  // Second pass
+  size_t max_byte_size = 0;
+  const std::string* max_input_name;
+  for (const auto& input : from.OriginalInputs()) {
+    // Skip shape tensors in this pass
+    if (input.second.IsShapeTensor()) {
+      continue;
+    }
+    if (input.second.Data()->TotalByteSize() >= max_byte_size) {
+      max_byte_size = input.second.Data()->TotalByteSize();
+      max_input_name = &(input.first);
+    }
+  }
+
+  // Third pass
+  // [DLIS-1268] should use one growable static buffer for all null requests
+  auto mem_type = TRITONSERVER_MEMORY_CPU;
+  int64_t mem_id = 0;
+  std::shared_ptr<Memory> data =
+      std::make_shared<AllocatedMemory>(max_byte_size, mem_type, mem_id);
+  auto data_base = data->BufferAt(0, &max_byte_size, &mem_type, &mem_id);
+  for (const auto& input : from.OriginalInputs()) {
+    // skip shape tensors in this pass
+    if (input.second.IsShapeTensor()) {
+      continue;
+    }
+    Input* new_input;
+    lrequest->AddOriginalInput(
+        input.first, input.second.DType(), input.second.Shape(), &new_input);
+
+    // Must normalize shape here...
+    *new_input->MutableShape() = input.second.Shape();
+    *new_input->MutableShapeWithBatchDim() = input.second.ShapeWithBatchDim();
+
+    // Note that the input that have max byte size will be responsible for
+    // holding the artifical data, while other inputs will hold a reference to
+    // it with byte size that matches 'from'
+    if (input.first == *max_input_name) {
+      new_input->SetData(data);
+    } else {
+      new_input->AppendData(
+          data_base, input.second.Data()->TotalByteSize(), mem_type, mem_id);
+    }
+  }
+
+  // No outputs were requested and thus there should be no allocations.
+  lrequest->SetResponseCallback(
+      &null_allocator, nullptr, NullResponseComplete, nullptr);
+  lrequest->SetReleaseCallback(NullRequestComplete, nullptr);
+
+  // Must normalize inputs here...
+  for (auto& pr : lrequest->original_inputs_) {
+    lrequest->inputs_.emplace(
+        std::make_pair(pr.first, std::addressof(pr.second)));
+  }
+
+  return lrequest.release();
+}
+
 Status
 InferenceRequest::MutableOriginalInput(
     const std::string& name, InferenceRequest::Input** input)

@@ -414,6 +414,8 @@ class InferenceRequest {
   // The statistics of the copy will not be collected.
   static InferenceRequest* CopyAsNull(const InferenceRequest& from);
 
+  static InferenceRequest* CopyAsNull(const InferenceRequest& from, int batch_size);
+
   uint64_t QueueStartNs() const { return queue_start_ns_; }
   uint64_t CaptureQueueStartNs()
   {

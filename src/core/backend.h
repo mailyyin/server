@@ -39,12 +39,16 @@ namespace nvidia { namespace inferenceserver {
   do {                                                                       \
     const auto& status__ = (S);                                              \
     if (!status__.IsOk()) {                                                  \
+      LOG_VERBOSE(1) << "yytest log_msg1:" << (LOG_MSG) <<                   \
+        " status:" << status__.AsString();                                   \
       for (auto& response : (RESPONSES)) {                                   \
         if (response != nullptr) {                                           \
           const auto& response_status__ = InferenceResponse::SendWithStatus( \
               std::move(response), TRITONSERVER_RESPONSE_COMPLETE_FINAL,     \
               status__);                                                     \
           LOG_STATUS_ERROR(response_status__, (LOG_MSG));                    \
+          LOG_VERBOSE(1) << "yytest log_msg2:" << (LOG_MSG) <<               \
+            " status:" << status__.AsString();                               \
         }                                                                    \
       }                                                                      \
       for (auto& request : (REQUESTS)) {                                     \
@@ -60,12 +64,16 @@ namespace nvidia { namespace inferenceserver {
   do {                                                                       \
     const auto& status__ = (S);                                              \
     if (!status__.IsOk()) {                                                  \
+      LOG_VERBOSE(1) << "yytest log_msg1:" << (LOG_MSG) <<                   \
+        " status:" << status__.AsString();                                   \
       for (auto& response : (RESPONSES)) {                                   \
         if (response != nullptr) {                                           \
           const auto& response_status__ = InferenceResponse::SendWithStatus( \
               std::move(response), TRITONSERVER_RESPONSE_COMPLETE_FINAL,     \
               status__);                                                     \
           LOG_STATUS_ERROR(response_status__, (LOG_MSG));                    \
+          LOG_VERBOSE(1) << "yytest log_msg2:" << (LOG_MSG) <<               \
+            " status:" << status__.AsString();                               \
         }                                                                    \
       }                                                                      \
       for (auto& request : (REQUESTS)) {                                     \

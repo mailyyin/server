@@ -31,6 +31,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/syscall.h>
 #include "src/core/constants.h"
 #include "src/core/logging.h"
 #include "src/core/model_config.h"
@@ -60,9 +61,15 @@ DynamicBatchScheduler::DynamicBatchScheduler(
       preserve_ordering_(preserve_ordering)
 {
   max_preferred_batch_size_ = 0;
+  min_preferred_batch_size_ = 0;
   for (const auto size : preferred_batch_sizes_) {
     max_preferred_batch_size_ =
         std::max(max_preferred_batch_size_, (size_t)size);
+
+    if (min_preferred_batch_size_ == 0 && size > 0) 
+      min_preferred_batch_size_ = size;
+    else
+      min_preferred_batch_size_ = std::min(min_preferred_batch_size_, (size_t)size);
   }
 }
 
@@ -229,6 +236,7 @@ DynamicBatchScheduler::SchedulerThread(
                    << " at default nice (requested nice " << nice
                    << " failed)...";
   }
+  LOG_VERBOSE(1) << "yytest runner_id:" << runner_id << " tid:" << syscall(SYS_gettid);
 
   // Initialize using the thread. If error then just exit this thread
   // now... that means the corresponding model instance will not have
@@ -348,6 +356,13 @@ DynamicBatchScheduler::SchedulerThread(
             }
           }
 
+          if (min_preferred_batch_size_ != 0 && pending_batch_size_ < min_preferred_batch_size_) {
+            LOG_VERBOSE(1) << "yytest fake request pending: " << pending_batch_size_ << " min:" << min_preferred_batch_size_;
+            int fake_batch_size = min_preferred_batch_size_ - pending_batch_size_;
+            std::unique_ptr<InferenceRequest> request(InferenceRequest::CopyAsNull(*requests[0], fake_batch_size));
+            requests.emplace_back(std::move(request));
+          }
+
           queued_batch_size_ -= pending_batch_size_;
           // Set next preferred to be 0 so that enqueue thread will wake up
           // runners when new request arrives. In the case where the queue
@@ -414,6 +429,7 @@ DynamicBatchScheduler::SchedulerThread(
     }
 
     if (!requests.empty()) {
+      LOG_VERBOSE(1) << "yytest OnSchedule_ requests.size:" << requests.size();
       OnSchedule_(runner_id, std::move(requests));
 
       // For testing we introduce a delay here to make the
@@ -538,6 +554,8 @@ DynamicBatchScheduler::GetDynamicBatch(const int64_t runner_id)
   // pending.
   if (send_now || (pending_batch_delay_ns_ == 0) ||
       (pending_batch_size_ >= max_preferred_batch_size_)) {
+    LOG_VERBOSE(1) << "yytest send_now:" << send_now << " pending_batch_delay_ns_:" << pending_batch_delay_ns_ << 
+      " pending_batch_size_:" << pending_batch_size_ << " max_preferred_batch_size_:" << max_preferred_batch_size_;
     return 0;
   }
 
@@ -551,6 +569,8 @@ DynamicBatchScheduler::GetDynamicBatch(const int64_t runner_id)
   uint64_t delay_ns = now_ns - queue_.OldestEnqueueTime();
 
   if (delay_ns >= pending_batch_delay_ns_) {
+    LOG_VERBOSE(1) << "yytest delay_ns:" << delay_ns << " pending_batch_delay_ns_:" << pending_batch_delay_ns_ <<
+      " pending_batch_size_:" << pending_batch_size_;
     return 0;
   }
 

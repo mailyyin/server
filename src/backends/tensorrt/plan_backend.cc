@@ -29,6 +29,8 @@
 #include <NvInfer.h>
 #include <stdint.h>
 #include <future>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include "src/backends/tensorrt/loader.h"
 #include "src/backends/tensorrt/plan_utils.h"
 #include "src/core/constants.h"
@@ -243,6 +245,10 @@ PlanBackend::CreateExecutionContexts(
       for (int gpu_device : group.gpus()) {
         size_t runner_idx = 0;
         if (Config().has_sequence_batching()) {
+        // if (true) {
+          LOG_VERBOSE(1) << "yytest available_context_queue_.size:" << available_context_queue_.size() << 
+            " c:" << c <<
+            " device:" << gpu_device;
           // For sequence batcher, there must be one runner per instance
           // instead of one runner per device
           runner_idx = available_context_queue_.size();
@@ -1953,6 +1959,7 @@ PlanBackend::Run(
     return;
   }
 
+  LOG_VERBOSE(1) << "yytest runner_id:" << runner_idx << " tid:" << syscall(SYS_gettid);
   contexts_[next_context_[runner_idx]]->Run(this, std::move(requests));
 
   auto context =
@@ -2260,6 +2267,7 @@ PlanBackend::Context::Run(
     payload_->responses_.emplace_back(std::move(response));
   }
 
+  LOG_VERBOSE(1) << "yytest concatenate input start tid:" << syscall(SYS_gettid);
   // For each input, concatenate input values from each request into
   // the corresponding binding.
   std::vector<int64_t> input_dims{(int64_t)payload_->total_batch_size_};
@@ -2477,6 +2485,7 @@ PlanBackend::Context::Run(
     }
   }
   collector.Finalize();
+  LOG_VERBOSE(1) << "yytest concatenate input finish tid:" << syscall(SYS_gettid);
 
   const TensorRTContext::CudaGraph* cuda_graph = nullptr;
   bool found_exact = false;
