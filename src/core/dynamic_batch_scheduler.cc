@@ -31,7 +31,6 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <sys/syscall.h>
 #include "src/core/constants.h"
 #include "src/core/logging.h"
 #include "src/core/model_config.h"
@@ -60,6 +59,14 @@ DynamicBatchScheduler::DynamicBatchScheduler(
       enforce_equal_shape_tensors_(enforce_equal_shape_tensors),
       preserve_ordering_(preserve_ordering)
 {
+  std::string str = "";
+  char buff[10];
+  for (const auto size : preferred_batch_sizes_) {
+    sprintf(buff, "%d,", size);
+    str += buff;
+  }
+  LOG_VERBOSE(1) << "yytest preferred_batch_sizes:" << str;
+
   max_preferred_batch_size_ = 0;
   min_preferred_batch_size_ = 0;
   for (const auto size : preferred_batch_sizes_) {

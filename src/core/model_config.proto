@@ -1568,4 +1568,6 @@ message ModelConfig
   //@@     to be expected from the model.
   //@@
   ModelTransactionPolicy model_transaction_policy = 19;
+
+  bool enable_multi_context = 22;
 }

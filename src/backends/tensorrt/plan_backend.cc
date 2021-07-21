@@ -244,9 +244,11 @@ PlanBackend::CreateExecutionContexts(
     for (int c = 0; c < group.count(); c++) {
       for (int gpu_device : group.gpus()) {
         size_t runner_idx = 0;
-        if (Config().has_sequence_batching()) {
-        // if (true) {
+        // if (Config().has_sequence_batching()) {
+        if (Config().has_sequence_batching() || 
+            Config().enable_multi_context()) {
           LOG_VERBOSE(1) << "yytest available_context_queue_.size:" << available_context_queue_.size() << 
+            " name:" << Config().name() <<
             " c:" << c <<
             " device:" << gpu_device;
           // For sequence batcher, there must be one runner per instance
